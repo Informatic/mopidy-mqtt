@@ -15,105 +15,80 @@ import pykka
 logger = logging.getLogger(__name__)
 
 class MQTTFrontend(pykka.ThreadingActor, core.CoreListener):
-
     def on_stop(self):
         logger.info("mopidy_mqtt shutting down ... ")
-        self.mqttClient.disconnect()
-        
+        self.mqtt.disconnect()
+
     def __init__(self, config, core):
         logger.info("mopidy_mqtt initializing ... ")
         self.core = core
-        self.mqttClient = mqtt.Client(client_id="mopidy", clean_session=True)
-        self.mqttClient.on_message = self.mqtt_on_message
-        self.mqttClient.on_connect = self.mqtt_on_connect     
-        
-        self.config = config['mqtthook']
-        host = self.config['mqtthost']
-        port = self.config['mqttport']
+        self.mqtt = mqtt.Client(client_id="mopidy", clean_session=True)
+        self.mqtt.on_message = self.mqtt_on_message
+        self.mqtt.on_connect = self.mqtt_on_connect
+        print(config)
+        self.config = config['mqtt']
         self.topic = self.config['topic']
-        self.mqttClient.connect_async(host, port, 60)        
-        
-        self.mqttClient.loop_start()
+        self.mqtt.connect_async(self.config['host'], self.config['port'], 60)
+        self.mqtt.loop_start()
+
         super(MQTTFrontend, self).__init__()
-        self.MQTTHook = MQTTHook(self, core, config, self.mqttClient)
-        
+
     def mqtt_on_connect(self, client, userdata, flags, rc):
         logger.info("Connected with result code %s" % rc)
-        
-        rc = self.mqttClient.subscribe(self.topic + "/play")
-        if rc[0] != mqtt.MQTT_ERR_SUCCESS:            
+
+        rc = self.mqtt.subscribe(self.set_topic('+'))
+        if rc[0] != mqtt.MQTT_ERR_SUCCESS:
             logger.warn("Error during subscribe: " + str(rc[0]))
+
+    def notify_topic(self, t):
+        # mopidy -> mqtt topic
+        return self.topic + '/' + t
+
+    def set_topic(self, t):
+        # mqtt -> mopidy topic
+        return self.topic + '/' + t + '/set'
+
+    def notify(self, prop, value):
+        # Use lowercase true/false, or raw string otherwise
+        if isinstance(value, bool):
+            value = str(value).lower()
         else:
-            logger.info("Subscribed to " + self.topic + "/play")
-        self.mqttClient.subscribe(self.topic + "/control")
-        logger.info("sub:" + self.topic + "/control")
-        
+            value = str(value)
+
+        self.mqtt.publish(self.notify_topic(prop), value)
+
     def mqtt_on_message(self, mqttc, obj, msg):
         logger.info("received a message on " + msg.topic+" with payload "+str(msg.payload))
-        topPlay = self.topic + "/play"
-        topControl = self.topic + "/control"
-        if msg.topic == topPlay:
-            self.core.tracklist.clear()
-            self.core.tracklist.add(None, None, str(msg.payload), None)
-            self.core.playback.play()
-            
-        if msg.topic == topControl:
-            if msg.payload == "stop":
-                self.core.playback.stop()
+
+        if msg.topic == self.set_topic('playing'):
+            if msg.payload == 'true':
+                self.core.playback.play()
+            else:
+                self.core.playback.pause()
+        elif msg.topic == self.set_topic('volume'):
+            self.core.mixer.set_volume(int(msg.payload))
+        elif msg.topic == self.set_topic('control'):
+            actions = {
+                b'play': self.core.playback.play,
+                b'stop': self.core.playback.stop,
+                b'pause': self.core.playback.pause,
+                b'resume': self.core.playback.resume,
+                b'next': self.core.playback.next,
+                b'previous': self.core.playback.previous,
+                }
+
+            if msg.payload in actions:
+                actions[msg.payload]()
+
 
     def stream_title_changed(self, title):
-        self.MQTTHook.send_title(title)
+        self.notify('title', title)
 
-    def playback_state_changed(self, old_state, new_state):
-        self.MQTTHook.send_playback_state(new_state)
-        if (new_state == "stopped"):
-            self.MQTTHook.send_title("stopped")
-        
     def track_playback_started(self, tl_track):
         track = tl_track.track
         artists = ', '.join(sorted([a.name for a in track.artists]))
-        self.MQTTHook.send_title(artists + ":" + track.name)
-        try:
-            album = track.album
-            albumImage = next(iter(album.images))
-            self.MQTTHook.send_image(albumImage)
-        except:
-            logger.debug("no image")
-        
-class MQTTHook():
-    def __init__(self, frontend, core, config, client):
-        self.config = config['mqtthook']        
-        self.mqttclient = client
-        
-    def send_playback_state(self, state):
-        try:
-            topic = self.config['topic'] + "/state"
-            rc = self.mqttclient.publish(topic, state)
-            if rc[0] == mqtt.MQTT_ERR_NO_CONN:            
-                logger.warn("Error during publish: MQTT_ERR_NO_CONN")
-            else:
-                logger.info("Sent " + state + " to " + topic)
-        except Exception as e:
-            logger.warning('Unable to send', exc_info=True)
-            
-    def send_title(self, title):
-        try:
-            topic = self.config['topic'] + "/nowplaying"
-            rc = self.mqttclient.publish(topic, title)
-            if rc[0] == mqtt.MQTT_ERR_NO_CONN:            
-                logger.warn("Error during publish: MQTT_ERR_NO_CONN")
-            else:
-                logger.info("Sent " + title + " to " + topic)
-        except Exception as e:
-            logger.warning('Unable to send', exc_info=True)
 
-    def send_image(self, image):
-        try:
-            topic = self.config['topic'] + "/image"
-            rc = self.mqttclient.publish(topic, image)
-            if rc[0] == mqtt.MQTT_ERR_NO_CONN:            
-                logger.warn("Error during publish: MQTT_ERR_NO_CONN")
-            else:
-                logger.info("Sent " + image + " to " + topic)
-        except Exception as e:
-            logger.warning('Unable to send', exc_info=True)
+        self.notify('title', artists + ' - ' + track.name)
+
+    def playback_state_changed(self, old_state, new_state):
+        self.notify('playing', new_state == 'playing')

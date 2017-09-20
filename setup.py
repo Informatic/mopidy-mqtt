@@ -38,7 +38,7 @@ setup(
     ],
     entry_points={
         'mopidy.ext': [
-            'mqtthook = mopidy_mqtt:Extension',
+            'mqtt = mopidy_mqtt:Extension',
         ],
     },
     classifiers=[
