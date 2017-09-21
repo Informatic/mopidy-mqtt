@@ -54,7 +54,7 @@ class MQTTFrontend(pykka.ThreadingActor, core.CoreListener):
             value = str(value).lower()
         else:
             value = str(value)
-
+        logger.info('notifying %s -> %s', prop, value)
         self.mqtt.publish(self.notify_topic(prop), value)
 
     def mqtt_on_message(self, mqttc, obj, msg):
@@ -83,6 +83,9 @@ class MQTTFrontend(pykka.ThreadingActor, core.CoreListener):
 
     def stream_title_changed(self, title):
         self.notify('title', title)
+
+    def volume_changed(self, volume):
+        self.notify('volume', volume)
 
     def track_playback_started(self, tl_track):
         track = tl_track.track
