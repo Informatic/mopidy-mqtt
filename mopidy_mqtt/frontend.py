@@ -55,7 +55,7 @@ class MQTTFrontend(pykka.ThreadingActor, core.CoreListener):
         else:
             value = str(value)
         logger.info('notifying %s -> %s', prop, value)
-        self.mqtt.publish(self.notify_topic(prop), value)
+        self.mqtt.publish(self.notify_topic(prop), value, 0, True)
 
     def mqtt_on_message(self, mqttc, obj, msg):
         logger.info("received a message on " + msg.topic+" with payload "+str(msg.payload))
